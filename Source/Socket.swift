@@ -128,7 +128,9 @@ public final class Socket {
             let data = try message.toJson()
             log("Sending: \(message.payload)")
             if let ref = message.ref {
+                var awaitingResponses = self.awaitingResponses
                 awaitingResponses[ref] = message
+                self.awaitingResponses = awaitingResponses
                 socket.write(data: data, completion: nil)
             }
         } catch let error as NSError {
@@ -165,15 +167,17 @@ extension Socket: WebSocketDelegate {
         onDisconnect?(error)
 
         // Reset state.
-        awaitingResponses.removeAll()
-        channels.removeAll()
+        awaitingResponses = [String: Push]()
+        channels = [String: Channel]()
     }
 
     public func websocketDidReceiveMessage(socket: WebSocketClient, text: String) {
         if let data = text.data(using: String.Encoding.utf8),
             let response = Response(data: data) {
             defer {
+                var awaitingResponses = self.awaitingResponses
                 awaitingResponses.removeValue(forKey: response.ref)
+                self.awaitingResponses = awaitingResponses
             }
 
             log("Received message: \(response.payload)")

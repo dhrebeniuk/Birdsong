@@ -11,5 +11,6 @@ Pod::Spec.new do |s|
   s.osx.deployment_target = '10.10'
   s.tvos.deployment_target = '9.0'
   s.source_files = 'Source/**/*'
-  s.dependency 'Starscream', '3.0.2'
+  s.dependency 'Starscream', '3.1.1'
 end
+

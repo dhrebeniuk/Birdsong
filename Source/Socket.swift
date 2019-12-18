@@ -118,8 +118,11 @@ public final class Socket {
         return send(push)
     }
     
-    func send(_ message: Push) -> Push {
+    func send(_ message: Push, completion: (() -> ())? = nil) -> Push {
         if !socket.isConnected {
+            defer {
+                completion?()
+            }
             message.handleNotConnected()
             return message
         }
@@ -128,14 +131,27 @@ public final class Socket {
             let data = try message.toJson()
             log("Sending: \(message.payload)")
             if let ref = message.ref {
-                var awaitingResponses = self.awaitingResponses
-                awaitingResponses[ref] = message
-                self.awaitingResponses = awaitingResponses
-                socket.write(data: data, completion: nil)
+                if Thread.isMainThread {
+                    var awaitingResponses = self.awaitingResponses
+                    awaitingResponses[ref] = message
+                    self.awaitingResponses = awaitingResponses
+                    self.socket.write(data: data, completion: completion)
+                }
+                else {
+                    DispatchQueue.main.sync {
+                        var awaitingResponses = self.awaitingResponses
+                        awaitingResponses[ref] = message
+                        self.awaitingResponses = awaitingResponses
+                        self.socket.write(data: data, completion: completion)
+                    }
+                }
             }
         } catch let error as NSError {
             log("Failed to send message: \(error)")
             message.handleParseError()
+            do {
+                completion?()
+            }
         }
         
         return message
@@ -174,19 +190,43 @@ extension Socket: WebSocketDelegate {
     public func websocketDidReceiveMessage(socket: WebSocketClient, text: String) {
         if let data = text.data(using: String.Encoding.utf8),
             let response = Response(data: data) {
-            defer {
-                var awaitingResponses = self.awaitingResponses
-                awaitingResponses.removeValue(forKey: response.ref)
-                self.awaitingResponses = awaitingResponses
+            
+            if (response.event == Event.Error) {
+                return
             }
+            
+            if Thread.isMainThread {
+                defer {
+                   var awaitingResponses = self.awaitingResponses
+                   awaitingResponses.removeValue(forKey: response.ref)
+                   self.awaitingResponses = awaitingResponses
+                }
 
-            log("Received message: \(response.payload)")
+                self.log("Received message: \(response.payload)")
 
-            if let push = awaitingResponses[response.ref] {
-                push.handleResponse(response)
+                if let push = self.awaitingResponses[response.ref] {
+                   push.handleResponse(response)
+                }
+
+                self.channels[response.topic]?.received(response)
             }
+            else {
+                DispatchQueue.main.sync {
+                    defer {
+                       var awaitingResponses = self.awaitingResponses
+                       awaitingResponses.removeValue(forKey: response.ref)
+                       self.awaitingResponses = awaitingResponses
+                    }
 
-            channels[response.topic]?.received(response)
+                    self.log("Received message: \(response.payload)")
+
+                    if let push = self.awaitingResponses[response.ref] {
+                       push.handleResponse(response)
+                    }
+
+                    self.channels[response.topic]?.received(response)
+                }
+            }
         } else {
             fatalError("Couldn't parse response: \(text)")
         }
